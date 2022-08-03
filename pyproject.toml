@@ -1,0 +1,16 @@
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = ["setuptools"]
+
+[project]
+dependencies = [
+  "autopep8",
+  "pettingzoo[butterfly]",
+  "pyglet",
+  "python-utils",
+  "stable_baselines3>=1.6.0",
+  "SuperSuit",
+  "xvfbwrapper"
+]
+name = "cartpole-algorithms"
+version = "0.0.1"
