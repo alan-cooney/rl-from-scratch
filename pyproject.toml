@@ -5,12 +5,15 @@ requires = ["setuptools"]
 [project]
 dependencies = [
   "autopep8",
+  "matplotlib",
+  "pandas",
   "pettingzoo[butterfly]",
   "pyglet",
   "python-utils",
   "stable_baselines3>=1.6.0",
   "SuperSuit",
-  "xvfbwrapper"
+  "torch",
+  "xvfbwrapper",
 ]
 name = "cartpole-algorithms"
 version = "0.0.1"
