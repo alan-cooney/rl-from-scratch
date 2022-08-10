@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.distributions.categorical import Categorical
-from torch.optim import Adam
+from torch.optim import Adam, Optimizer
 import numpy as np
 import gym
 
@@ -45,17 +45,106 @@ def get_policy(model: nn.Module, observation: np.ndarray) -> Categorical:
     return Categorical(logits=logits)
 
 
-def get_action(policy: Categorical) -> int:
-    action = policy.sample().item()
-    return action
+def get_action(policy: Categorical) -> tuple[int, float]:
+    """Sample an action from the policy
+
+    Args:
+        policy (Categorical): Policy
+
+    Returns:
+        tuple[int, float]: Tuple of the action and it's log probability
+    """
+    action = policy.sample()  # Unit tensor
+
+    # Converts to an int, as this is what Gym environments require
+    action_int = action.item()
+
+    # Calculate the log probability of the action, which is required for
+    # calculating the loss later
+    log_probability_action = policy.log_prob(action)
+
+    return action_int, log_probability_action
 
 
-def compute_loss(policy: Categorical, action: torch.Tensor, weights: torch.Tensor):
-    logp = policy.log_prob(action)
-    return -(logp * weights).mean()
+def calculate_loss(epoch_log_probability_actions: torch.Tensor, epoch_action_rewards: torch.Tensor) -> float:
+    """Calculate the 'loss' required to get the policy gradient
+
+    Formula for gradient at
+    https://spinningup.openai.com/en/latest/spinningup/rl_intro3.html#deriving-the-simplest-policy-gradient
+
+    Note that this isn't really loss - it's just the sum of the log probability
+    of each action times the episode return. We calculate this so we can
+    back-propogate to get the policy gradient.
+
+    Args:
+        epoch_log_probability_actions (torch.Tensor): Log probabilities of the
+        actions taken
+        epoch_action_rewards (torch.Tensor): Rewards for each of these actions
+
+    Returns:
+        float: Pseudo-loss
+    """
+    return -(epoch_log_probability_actions * epoch_action_rewards).mean()
 
 
-def train(epochs=30, batch_size=5000):
+def train_one_epoch(env: gym.Env, model: nn.Module, optimizer: Optimizer, episodes=100, max_timesteps=200) -> float:
+
+    # Returns from each episode (to keep track of progress)
+    epoch_returns: list[int] = []
+
+    # Actions, log probabilities and rewards per step (for calculating loss)
+    epoch_log_probability_actions = []
+    epoch_action_rewards = []
+
+    # Loop through episodes
+    for _ in range(episodes):
+
+        # Running total of this episode's rewards
+        episode_reward: int = 0
+
+        # Reset the environment and get a fresh observation
+        observation = env.reset()
+
+        # Loop through timesteps until the epsiode is done (or the max is hit)
+        for timestep in range(max_timesteps):
+            # Get the policy and act
+            policy = get_policy(model, observation)
+            action, log_probability_action = get_action(policy)
+            observation, reward, done, _ = env.step(action)
+
+            # Increment the episode rewards
+            episode_reward += reward
+
+            # Add epoch action log probabilities
+            epoch_log_probability_actions.append(log_probability_action)
+
+            # Finish the action loop if this episode is done
+            if done == True:
+                # Add one reward per timestep
+                epoch_action_rewards.append(episode_reward)
+                for _ in range(timestep):
+                    epoch_action_rewards.append(episode_reward)
+
+                break
+
+        # Increment the epoch returns
+        epoch_returns.append(episode_reward)
+
+    # Calculate the policy gradient, and use it to step the weights & biases
+    epoch_loss = calculate_loss(torch.stack(
+        epoch_log_probability_actions),
+        torch.as_tensor(
+        epoch_action_rewards, dtype=torch.float32)
+    )
+
+    epoch_loss.backward()
+    optimizer.step()
+    optimizer.zero_grad()
+
+    return np.mean(epoch_returns)
+
+
+def train(epochs=10):
     # Create the Gym Environment
     env = gym.make('CartPole-v0')
 
@@ -71,65 +160,9 @@ def train(epochs=30, batch_size=5000):
     # Create the optimizer
     optimizer = Adam(model.parameters(), 1e-2)
 
-    # for training policy
-    def train_one_epoch() -> float:
-        epoch_timesteps_elapsed = 0
-
-        # make some empty lists for logging.
-        batch_acts = []         # for actions
-        batch_weights = []      # for R(tau) weighting in policy gradient
-        batch_rets = []         # for measuring episode returns
-
-        # reset episode-specific variables
-        observation = env.reset()       # first obs comes from starting distribution
-        ep_rews = []            # list for rewards accrued throughout ep
-
-        # Loop through timesteps
-        while True:
-            # Increment the timesteps
-            epoch_timesteps_elapsed += 1
-
-            # act in the environment
-            policy = get_policy(model, observation)
-            action = get_action(policy)
-            observation, reward, done, _ = env.step(action)
-
-            # save action, reward
-            batch_acts.append(action)
-            ep_rews.append(reward)
-
-            if done:
-                # if episode is over, record info about episode
-                ep_ret, ep_len = sum(ep_rews), len(ep_rews)
-                batch_rets.append(ep_ret)
-
-                # the weight for each logprob(a|s) is R(tau)
-                batch_weights += [ep_ret] * ep_len
-
-                # reset episode-specific variables
-                observation = env.reset()
-                ep_rews = []
-
-                # end experience loop if we have enough of it
-                if epoch_timesteps_elapsed > batch_size:
-                    break
-
-        # take a single policy gradient update step
-        optimizer.zero_grad()
-        batch_loss = compute_loss(policy,
-                                  torch.as_tensor(
-                                      batch_acts, dtype=torch.int32),
-                                  torch.as_tensor(
-                                      batch_weights, dtype=torch.float32)
-                                  )
-        batch_loss.backward()
-        optimizer.step()
-
-        return np.mean(batch_rets)
-
-    # training loop
+    # Loop for each epoch
     for epoch in range(epochs):
-        average_return = train_one_epoch()
+        average_return = train_one_epoch(env, model, optimizer)
         print('epoch: %3d \t return: %.3f' % (epoch, average_return))
 
 
