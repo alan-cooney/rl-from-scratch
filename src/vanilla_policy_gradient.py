@@ -4,130 +4,134 @@ from torch.distributions.categorical import Categorical
 from torch.optim import Adam
 import numpy as np
 import gym
-from gym.spaces import Discrete, Box
 
 
-def mlp(sizes, activation=nn.Tanh, output_activation=nn.Identity):
-    # Build a feedforward neural network.
-    layers = []
-    for j in range(len(sizes)-1):
-        act = activation if j < len(sizes)-2 else output_activation
-        layers += [nn.Linear(sizes[j], sizes[j+1]), act()]
-    return nn.Sequential(*layers)
+def create_model(number_observation_features: int, number_actions: int) -> nn.Module:
+    """Create the MLP model
+
+    Args:
+        number_observation_features (int): Number of features in the (flat)
+        observation tensor
+        number_actions (int): Number of actions
+
+    Returns:
+        nn.Module: Simple MLP model
+    """
+    hidden_layer_features = 32
+
+    return nn.Sequential(
+        nn.Linear(in_features=number_observation_features,
+                  out_features=hidden_layer_features),
+        nn.ReLU(),
+        nn.Linear(in_features=hidden_layer_features,
+                  out_features=number_actions),
+    )
 
 
-def train(env_name='CartPole-v0', hidden_sizes=[32], lr=1e-2,
-          epochs=50, batch_size=5000, render=False):
+def get_policy(model: nn.Module, observation: np.ndarray) -> Categorical:
+    """Get the policy from the model, for a specific observation
 
-    # make environment, check spaces, get obs / act dims
-    env = gym.make(env_name)
-    assert isinstance(env.observation_space, Box), \
-        "This example only works for envs with continuous state spaces."
-    assert isinstance(env.action_space, Discrete), \
-        "This example only works for envs with discrete action spaces."
+    Args:
+        model (nn.Module): MLP model
+        observation (np.ndarray): Environment observation
 
-    obs_dim = env.observation_space.shape[0]
-    n_acts = env.action_space.n
+    Returns:
+        Categorical: Nultinomial distribution paramtised by model logits
+    """
+    observation_tensor = torch.as_tensor(observation, dtype=torch.float32)
+    logits = model(observation_tensor)
 
-    # make core of policy network
-    logits_net = mlp(sizes=[obs_dim]+hidden_sizes+[n_acts])
+    # Categorical will also normalise the logits for us
+    return Categorical(logits=logits)
 
-    # make function to compute action distribution
-    def get_policy(obs):
-        logits = logits_net(obs)
-        return Categorical(logits=logits)
 
-    # make action selection function (outputs int actions, sampled from policy)
-    def get_action(obs):
-        return get_policy(obs).sample().item()
+def get_action(policy: Categorical) -> int:
+    action = policy.sample().item()
+    return action
 
-    # make loss function whose gradient, for the right data, is policy gradient
-    def compute_loss(obs, act, weights):
-        logp = get_policy(obs).log_prob(act)
-        return -(logp * weights).mean()
 
-    # make optimizer
-    optimizer = Adam(logits_net.parameters(), lr=lr)
+def compute_loss(policy: Categorical, action: torch.Tensor, weights: torch.Tensor):
+    logp = policy.log_prob(action)
+    return -(logp * weights).mean()
+
+
+def train(epochs=30, batch_size=5000):
+    # Create the Gym Environment
+    env = gym.make('CartPole-v0')
+
+    # Use random seeds (to make experiments deterministic)
+    torch.manual_seed(0)
+    env.seed(0)
+
+    # Create the MLP model
+    number_observation_features = env.observation_space.shape[0]
+    number_actions = env.action_space.n
+    model = create_model(number_observation_features, number_actions)
+
+    # Create the optimizer
+    optimizer = Adam(model.parameters(), 1e-2)
 
     # for training policy
-    def train_one_epoch():
+    def train_one_epoch() -> float:
+        epoch_timesteps_elapsed = 0
+
         # make some empty lists for logging.
-        batch_obs = []          # for observations
         batch_acts = []         # for actions
         batch_weights = []      # for R(tau) weighting in policy gradient
         batch_rets = []         # for measuring episode returns
-        batch_lens = []         # for measuring episode lengths
 
         # reset episode-specific variables
-        obs = env.reset()       # first obs comes from starting distribution
-        done = False            # signal from environment that episode is over
+        observation = env.reset()       # first obs comes from starting distribution
         ep_rews = []            # list for rewards accrued throughout ep
 
-        # render first episode of each epoch
-        finished_rendering_this_epoch = False
-
-        # collect experience by acting in the environment with current policy
+        # Loop through timesteps
         while True:
-
-            # rendering
-            if (not finished_rendering_this_epoch) and render:
-                env.render()
-
-            # save obs
-            batch_obs.append(obs.copy())
+            # Increment the timesteps
+            epoch_timesteps_elapsed += 1
 
             # act in the environment
-            act = get_action(torch.as_tensor(obs, dtype=torch.float32))
-            obs, rew, done, _ = env.step(act)
+            policy = get_policy(model, observation)
+            action = get_action(policy)
+            observation, reward, done, _ = env.step(action)
 
             # save action, reward
-            batch_acts.append(act)
-            ep_rews.append(rew)
+            batch_acts.append(action)
+            ep_rews.append(reward)
 
             if done:
                 # if episode is over, record info about episode
                 ep_ret, ep_len = sum(ep_rews), len(ep_rews)
                 batch_rets.append(ep_ret)
-                batch_lens.append(ep_len)
 
                 # the weight for each logprob(a|s) is R(tau)
                 batch_weights += [ep_ret] * ep_len
 
                 # reset episode-specific variables
-                obs, done, ep_rews = env.reset(), False, []
-
-                # won't render again this epoch
-                finished_rendering_this_epoch = True
+                observation = env.reset()
+                ep_rews = []
 
                 # end experience loop if we have enough of it
-                if len(batch_obs) > batch_size:
+                if epoch_timesteps_elapsed > batch_size:
                     break
 
         # take a single policy gradient update step
         optimizer.zero_grad()
-        batch_loss = compute_loss(obs=torch.as_tensor(batch_obs, dtype=torch.float32),
-                                  act=torch.as_tensor(
+        batch_loss = compute_loss(policy,
+                                  torch.as_tensor(
                                       batch_acts, dtype=torch.int32),
-                                  weights=torch.as_tensor(
+                                  torch.as_tensor(
                                       batch_weights, dtype=torch.float32)
                                   )
         batch_loss.backward()
         optimizer.step()
-        return batch_loss, batch_rets, batch_lens
+
+        return np.mean(batch_rets)
 
     # training loop
-    for i in range(epochs):
-        batch_loss, batch_rets, batch_lens = train_one_epoch()
-        print('epoch: %3d \t loss: %.3f \t return: %.3f \t ep_len: %.3f' %
-              (i, batch_loss, np.mean(batch_rets), np.mean(batch_lens)))
+    for epoch in range(epochs):
+        average_return = train_one_epoch()
+        print('epoch: %3d \t return: %.3f' % (epoch, average_return))
 
 
 if __name__ == '__main__':
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--env_name', '--env', type=str, default='CartPole-v0')
-    parser.add_argument('--render', action='store_true')
-    parser.add_argument('--lr', type=float, default=1e-2)
-    args = parser.parse_args()
-    print('\nUsing simplest formulation of policy gradient.\n')
-    train(env_name=args.env_name, render=args.render, lr=args.lr)
+    train()
