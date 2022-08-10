@@ -78,7 +78,7 @@ def calculate_loss(epoch_log_probability_actions: torch.Tensor, epoch_action_rew
 
     Args:
         epoch_log_probability_actions (torch.Tensor): Log probabilities of the
-        actions taken
+            actions taken
         epoch_action_rewards (torch.Tensor): Rewards for each of these actions
 
     Returns:
@@ -87,17 +87,36 @@ def calculate_loss(epoch_log_probability_actions: torch.Tensor, epoch_action_rew
     return -(epoch_log_probability_actions * epoch_action_rewards).mean()
 
 
-def train_one_epoch(env: gym.Env, model: nn.Module, optimizer: Optimizer, episodes=100, max_timesteps=200) -> float:
+def train_one_epoch(env: gym.Env, model: nn.Module, optimizer: Optimizer, max_timesteps=5000, episode_timesteps=200) -> float:
+    """Train the model for one epoch
+
+    Args:
+        env (gym.Env): Gym environment
+        model (nn.Module): Model
+        optimizer (Optimizer): Optimizer
+        max_timesteps (int, optional): Max timesteps per epoch. Note if an
+            episode is part-way through, it will still complete before finishing
+            the epoch. Defaults to 5000.
+        episode_timesteps (int, optional): Timesteps per episode. Defaults to 200.
+
+    Returns:
+        float: Average return from the epoch
+    """
+    epoch_total_timesteps = 0
 
     # Returns from each episode (to keep track of progress)
     epoch_returns: list[int] = []
 
-    # Actions, log probabilities and rewards per step (for calculating loss)
+    # Actionl og probabilities and rewards per step (for calculating loss)
     epoch_log_probability_actions = []
     epoch_action_rewards = []
 
     # Loop through episodes
-    for _ in range(episodes):
+    while True:
+
+        # Stop if we've done over the total number of timesteps
+        if epoch_total_timesteps > max_timesteps:
+            break
 
         # Running total of this episode's rewards
         episode_reward: int = 0
@@ -106,7 +125,9 @@ def train_one_epoch(env: gym.Env, model: nn.Module, optimizer: Optimizer, episod
         observation = env.reset()
 
         # Loop through timesteps until the epsiode is done (or the max is hit)
-        for timestep in range(max_timesteps):
+        for timestep in range(episode_timesteps):
+            epoch_total_timesteps += 1
+
             # Get the policy and act
             policy = get_policy(model, observation)
             action, log_probability_action = get_action(policy)
@@ -121,8 +142,7 @@ def train_one_epoch(env: gym.Env, model: nn.Module, optimizer: Optimizer, episod
             # Finish the action loop if this episode is done
             if done == True:
                 # Add one reward per timestep
-                epoch_action_rewards.append(episode_reward)
-                for _ in range(timestep):
+                for _ in range(timestep + 1):
                     epoch_action_rewards.append(episode_reward)
 
                 break
@@ -144,7 +164,13 @@ def train_one_epoch(env: gym.Env, model: nn.Module, optimizer: Optimizer, episod
     return np.mean(epoch_returns)
 
 
-def train(epochs=10):
+def train(epochs=40) -> None:
+    """Train a Vanilla Policy Gradient model on CartPole
+
+    Args:
+        epochs (int, optional): The number of epochs to run for. Defaults to 50.
+    """
+
     # Create the Gym Environment
     env = gym.make('CartPole-v0')
 
