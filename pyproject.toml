@@ -10,6 +10,8 @@ dependencies = [
   "pettingzoo[butterfly]",
   "pyglet",
   "python-utils",
+  "spinup",
+  "scipy",
   "stable_baselines3>=1.6.0",
   "SuperSuit",
   "torch",
