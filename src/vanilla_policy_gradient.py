@@ -36,7 +36,7 @@ def get_policy(model: nn.Module, observation: np.ndarray) -> Categorical:
         observation (np.ndarray): Environment observation
 
     Returns:
-        Categorical: Nultinomial distribution paramtised by model logits
+        Categorical: Multinomial distribution paramtised by model logits
     """
     observation_tensor = torch.as_tensor(observation, dtype=torch.float32)
     logits = model(observation_tensor)
