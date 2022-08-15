@@ -2,7 +2,7 @@
 
 Implementations of various RL algorithms from scratch.
 
-## Included Models
+## Included Algorithms
 
 ### Vanilla Policy Gradient (VPG)
 
