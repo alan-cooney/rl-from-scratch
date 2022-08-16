@@ -3,7 +3,7 @@ import torch.nn as nn
 from torch.distributions.categorical import Categorical
 from torch.optim import Adam, Optimizer
 import numpy as np
-import gym
+import gym  # type: ignore
 
 
 def create_model(number_observation_features: int, number_outputs: int) -> nn.Module:
@@ -46,19 +46,19 @@ def get_policy(model: nn.Module, observation: np.ndarray) -> Categorical:
     return Categorical(logits=logits)
 
 
-def get_action(policy: Categorical) -> tuple[int, float]:
+def get_action(policy: Categorical) -> tuple[int, torch.Tensor]:
     """Sample an action from the policy
 
     Args:
         policy (Categorical): Policy
 
     Returns:
-        tuple[int, float]: Tuple of the action and it's log probability
+        tuple[int, torch.Tensor]: Tuple of the action and it's log probability
     """
     action = policy.sample()  # Unit tensor
 
     # Converts to an int, as this is what Gym environments require
-    action_int = action.item()
+    action_int = int(action.item())
 
     # Calculate the log probability of the action, which is required for
     # calculating the loss later
@@ -69,7 +69,7 @@ def get_action(policy: Categorical) -> tuple[int, float]:
 
 def calculate_policy_fn_loss(
         epoch_log_probability_actions: torch.Tensor,
-        epoch_action_advantage_estimators: torch.Tensor) -> float:
+        epoch_action_advantage_estimators: torch.Tensor) -> torch.Tensor:
     """Calculate the policy function (actor) 'loss' required to get the policy gradient
 
     Formula for gradient at
@@ -85,20 +85,20 @@ def calculate_policy_fn_loss(
         epoch_action_advantage_estimators (torch.Tensor): Advantage estimators for each of these actions
 
     Returns:
-        float: Pseudo-loss
+        torch.Tensor: Pseudo-loss
     """
     return -(epoch_log_probability_actions * epoch_action_advantage_estimators).mean()
 
 
 def calculate_value_fn_loss(
-        epoch_action_returns: list[int],
-        epoch_state_value_estimates: list[torch.Tensor]) -> float:
+        epoch_action_returns: list[float],
+        epoch_state_value_estimates: list[torch.Tensor]) -> torch.Tensor:
     """Calculate the value function (critic) loss
 
     Uses mean squared error
 
     Args:
-        epoch_action_returns (list[int]): State-action returns
+        epoch_action_returns (list[float]): State-action returns
         epoch_state_value_estimates (list[torch.Tensor]): State value estimates
 
     Returns:
@@ -110,7 +110,7 @@ def calculate_value_fn_loss(
 
 
 def generalized_advantage_estimates(
-    rewards: list[int],
+    rewards: list[float],
     state_value_estimates: list[torch.Tensor],
     gamma=0.99,
     lam=0.95
@@ -156,7 +156,7 @@ def run_one_episode(
     env: gym.Env,
     policy_function_model: nn.Module,
     value_function_model: nn.Module
-) -> tuple[list[int], list[torch.Tensor], list[torch.Tensor], list[float], int]:
+) -> tuple[list[float], list[torch.Tensor], list[torch.Tensor], list[float], float]:
     """Run one episode
 
     Args:
@@ -166,12 +166,12 @@ def run_one_episode(
         optimizer (Optimizer): Optimizer
 
     Returns:
-        tuple[list[int], list[float], int]: Tuple of action returns, log
-        probabilities of those actions, state value estimates, gaes, and the
-        total episode return
+        tuple[list[float], list[torch.Tensor], list[torch.Tensor], list[float],
+        float]: Tuple of action returns, log probabilities of those actions, state
+        value estimates, gaes, and the total episode return.
     """
     # Keep track of metrics
-    rewards: list[int] = []
+    rewards: list[float] = []
     state_value_estimates: list[torch.Tensor] = []
     log_probability_actions: list[torch.Tensor] = []
 
@@ -195,16 +195,16 @@ def run_one_episode(
         log_probability_actions.append(log_probability_action)
 
         # Finish the action loop if this episode is done
-        if done == True:
+        if done is True:
             break
 
     # Calculate the generalized advantage estimates (GAEs)
     gaes = generalized_advantage_estimates(rewards, state_value_estimates)
 
     # Calculate the action returns
-    episode_return = sum(rewards)
+    episode_return: float = sum(rewards)
     total_timesteps = len(rewards)
-    action_returns = [episode_return] * total_timesteps
+    action_returns: list[float] = [episode_return] * total_timesteps
 
     return action_returns, log_probability_actions, state_value_estimates, gaes, episode_return
 
@@ -227,11 +227,11 @@ def train_one_epoch(
         float: Average return from the epoch
     """
     # Keep track of metrics
-    epoch_action_returns: list[int] = []
+    epoch_action_returns: list[float] = []
     epoch_advantage_estimators: list[float] = []
     epoch_log_probability_actions: list[torch.Tensor] = []
     epoch_state_value_estimates: list[torch.Tensor] = []
-    epoch_episode_returns: list[int] = []
+    epoch_episode_returns: list[float] = []
 
     # Run a batch of episodes
     for _ in range(200):
@@ -265,7 +265,7 @@ def train_one_epoch(
     value_function_optimizer.zero_grad()
     policy_function_optimizer.zero_grad()
 
-    return np.mean(epoch_episode_returns)
+    return float(np.mean(epoch_episode_returns))
 
 
 def train(epochs=30) -> None:
