@@ -115,6 +115,21 @@ def generalized_advantage_estimates(
     gamma=0.99,
     lam=0.95
 ) -> list[float]:
+    """Generalized advantage estimates for one episode
+
+    Follows the approach in 'High-Dimensional Continuous Control Using
+    Generalized Advantage Estimation' at https://arxiv.org/abs/1506.02438 .
+
+    Args:
+        rewards (list[int]): Episode rewards
+        state_value_estimates (list[torch.Tensor]): State value estimates from
+        the critic model
+        gamma (float, optional): Gamma hyperparameter. Defaults to 0.99.
+        lam (float, optional): Lambda hyperparameter. Defaults to 0.95.
+
+    Returns:
+        list[float]: GAEs (one per timestep of the episode)
+    """
 
     episode_length = len(rewards)
 
