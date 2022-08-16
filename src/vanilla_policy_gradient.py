@@ -36,12 +36,12 @@ def get_policy(model: nn.Module, observation: np.ndarray) -> Categorical:
         observation (np.ndarray): Environment observation
 
     Returns:
-        Categorical: Multinomial distribution paramtised by model logits
+        Categorical: Multinomial distribution parameterized by model logits
     """
     observation_tensor = torch.as_tensor(observation, dtype=torch.float32)
     logits = model(observation_tensor)
 
-    # Categorical will also normalise the logits for us
+    # Categorical will also normalize the logits for us
     return Categorical(logits=logits)
 
 
@@ -74,7 +74,7 @@ def calculate_loss(epoch_log_probability_actions: torch.Tensor, epoch_action_rew
 
     Note that this isn't really loss - it's just the sum of the log probability
     of each action times the episode return. We calculate this so we can
-    back-propogate to get the policy gradient.
+    back-propagate to get the policy gradient.
 
     Args:
         epoch_log_probability_actions (torch.Tensor): Log probabilities of the
@@ -107,7 +107,7 @@ def train_one_epoch(env: gym.Env, model: nn.Module, optimizer: Optimizer, max_ti
     # Returns from each episode (to keep track of progress)
     epoch_returns: list[int] = []
 
-    # Actionl og probabilities and rewards per step (for calculating loss)
+    # Action log probabilities and rewards per step (for calculating loss)
     epoch_log_probability_actions = []
     epoch_action_rewards = []
 
@@ -124,7 +124,7 @@ def train_one_epoch(env: gym.Env, model: nn.Module, optimizer: Optimizer, max_ti
         # Reset the environment and get a fresh observation
         observation = env.reset()
 
-        # Loop through timesteps until the epsiode is done (or the max is hit)
+        # Loop through timesteps until the episode is done (or the max is hit)
         for timestep in range(episode_timesteps):
             epoch_total_timesteps += 1
 
