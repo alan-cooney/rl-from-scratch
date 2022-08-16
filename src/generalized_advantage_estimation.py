@@ -67,7 +67,24 @@ def get_action(policy: Categorical) -> tuple[int, float]:
     return action_int, log_probability_action
 
 
-def calculate_loss(epoch_log_probability_actions: torch.Tensor, epoch_action_rewards: torch.Tensor) -> float:
+def calculate_value_fn_loss(epoch_action_returns: list[int], epoch_state_value_estimates: list[torch.Tensor]) -> float:
+    """Calculate the value function (critic) loss
+
+    Uses mean squared error
+
+    Args:
+        epoch_action_returns (list[int]): State-action returns
+        epoch_state_value_estimates (list[torch.Tensor]): State value estimates
+
+    Returns:
+        float: Mean square error (MSE)
+    """
+    value_estimates = torch.stack(epoch_state_value_estimates)
+    returns = torch.as_tensor(epoch_action_returns)
+    return ((value_estimates - returns)**2).mean()
+
+
+def calculate_policy_fn_loss(epoch_log_probability_actions: torch.Tensor, epoch_action_rewards: torch.Tensor) -> float:
     """Calculate the 'loss' required to get the policy gradient
 
     Formula for gradient at
@@ -88,20 +105,26 @@ def calculate_loss(epoch_log_probability_actions: torch.Tensor, epoch_action_rew
     return -(epoch_log_probability_actions * epoch_action_rewards).mean()
 
 
-def run_one_episode(env: gym.Env, policy_function_model: nn.Module) -> tuple[list[int], list[torch.Tensor], int]:
+def run_one_episode(
+    env: gym.Env,
+    policy_function_model: nn.Module,
+    value_function_model: nn.Module
+) -> tuple[list[int], list[torch.Tensor], list[torch.Tensor], int]:
     """Run one episode
 
     Args:
         env (gym.Env): Gym environment
-        policy_function_model (nn.Module): Model
+        policy_function_model (nn.Module): Policy function model (actor)
+        value_function_model (nn.Module): Value function model (critic)
         optimizer (Optimizer): Optimizer
 
     Returns:
         tuple[list[int], list[float], int]: Tuple of action returns, log
-        probabilities of those actions, and the total episode return
+        probabilities of those actions, state value estimates, and the total episode return
     """
     # Keep track of episode metrics
     rewards: list[int] = []
+    state_value_estimates: list[torch.Tensor] = []
     log_probability_actions: list[torch.Tensor] = []
 
     # Reset the environment and get a fresh observation
@@ -109,6 +132,11 @@ def run_one_episode(env: gym.Env, policy_function_model: nn.Module) -> tuple[lis
 
     # Loop through timesteps (until done)
     while True:
+        # Estimate the value of the state
+        state_value_estimate = value_function_model(
+            torch.as_tensor(observation, dtype=torch.float32))
+        state_value_estimates.append(state_value_estimate)
+
         # Get the policy and act
         policy = get_policy(policy_function_model, observation)
         action, log_probability_action = get_action(policy)
@@ -127,43 +155,63 @@ def run_one_episode(env: gym.Env, policy_function_model: nn.Module) -> tuple[lis
     total_timesteps = len(rewards)
     action_returns = [episode_return] * total_timesteps
 
-    return action_returns, log_probability_actions, episode_return
+    return action_returns, log_probability_actions, state_value_estimates, episode_return
 
 
-def train_one_epoch(env: gym.Env, policy_function_model: nn.Module, optimizer: Optimizer) -> float:
+def train_one_epoch(
+    env: gym.Env,
+    policy_function_model: nn.Module,
+    policy_function_optimizer: Optimizer,
+    value_function_model: nn.Module,
+    value_function_optimizer: Optimizer
+) -> float:
     """Train one epoch
 
     Args:
         env (gym.Env): Gym environment
-        policy_function_model (nn.Module): Model
-        optimizer (Optimizer): Optimizer
+        policy_function_model (nn.Module): Policy function model (actor)
+        policy_function_optimizer (Optimizer): Policy function optimizer (actor)
 
     Returns:
         float: Average return from the epoch
     """
 
-    epoch_action_returns = []
-    epoch_log_probability_actions = []
-    epoch_episode_returns = []
+    epoch_action_returns: list[int] = []
+    epoch_log_probability_actions: list[torch.Tensor] = []
+    epoch_state_value_estimates: list[torch.Tensor] = []
+    epoch_episode_returns: list[int] = []
 
     # Run a batch of episodes
     for _ in range(200):
-        action_returns, log_probability_actions, episode_return = run_one_episode(
-            env, policy_function_model)
+        action_returns, log_probability_actions, state_value_estimates, episode_return = run_one_episode(
+            env,
+            policy_function_model,
+            value_function_model)
         epoch_action_returns += action_returns
         epoch_log_probability_actions += log_probability_actions
+        epoch_state_value_estimates += state_value_estimates
         epoch_episode_returns.append(episode_return)
 
-    epoch_loss = calculate_loss(torch.stack(
+    # Calculate the value function loss
+    value_function_loss = calculate_value_fn_loss(
+        epoch_action_returns, epoch_state_value_estimates)
+
+    # Calculate the policy function loss
+    policy_function_loss = calculate_policy_fn_loss(torch.stack(
         epoch_log_probability_actions),
         torch.as_tensor(
         epoch_action_returns, dtype=torch.float32)
     )
 
     # Step the weights and biases
-    epoch_loss.backward()
-    optimizer.step()
-    optimizer.zero_grad()
+    value_function_loss.backward()
+    value_function_optimizer.step()
+
+    policy_function_loss.backward()
+    policy_function_optimizer.step()
+
+    value_function_optimizer.zero_grad()
+    policy_function_optimizer.zero_grad()
 
     return np.mean(epoch_episode_returns)
 
@@ -192,16 +240,21 @@ def train(epochs=30) -> None:
     number_actions = env.action_space.n
     policy_function_model = create_model(
         number_observation_features, number_actions)
-    # value_function_model = create_model(number_observation_features, 1)
+    value_function_model = create_model(number_observation_features, 1)
 
     # Create the optimizers
     policy_function_optimizer = Adam(policy_function_model.parameters(), 1e-2)
-    # value_function_optimizer = Adam(value_function_model.parameters(), 1e-2)
+    value_function_optimizer = Adam(value_function_model.parameters(), 1e-2)
 
     # Loop for each epoch
     for epoch in range(epochs):
         average_return = train_one_epoch(
-            env, policy_function_model, policy_function_optimizer)
+            env,
+            policy_function_model,
+            policy_function_optimizer,
+            value_function_model,
+            value_function_optimizer)
+
         print('epoch: %3d \t return: %.3f' % (epoch, average_return))
 
 
