@@ -3,7 +3,7 @@ import torch.nn as nn
 from torch.distributions.categorical import Categorical
 from torch.optim import Adam, Optimizer
 import numpy as np
-import gym
+import gym  # type: ignore
 
 
 def create_model(number_observation_features: int, number_actions: int) -> nn.Module:
@@ -45,19 +45,19 @@ def get_policy(model: nn.Module, observation: np.ndarray) -> Categorical:
     return Categorical(logits=logits)
 
 
-def get_action(policy: Categorical) -> tuple[int, float]:
+def get_action(policy: Categorical) -> tuple[int, torch.Tensor]:
     """Sample an action from the policy
 
     Args:
         policy (Categorical): Policy
 
     Returns:
-        tuple[int, float]: Tuple of the action and it's log probability
+        tuple[int, torch.Tensor]: Tuple of the action and it's log probability
     """
     action = policy.sample()  # Unit tensor
 
     # Converts to an int, as this is what Gym environments require
-    action_int = action.item()
+    action_int = int(action.item())
 
     # Calculate the log probability of the action, which is required for
     # calculating the loss later
@@ -66,7 +66,7 @@ def get_action(policy: Categorical) -> tuple[int, float]:
     return action_int, log_probability_action
 
 
-def calculate_loss(epoch_log_probability_actions: torch.Tensor, epoch_action_rewards: torch.Tensor) -> float:
+def calculate_loss(epoch_log_probability_actions: torch.Tensor, epoch_action_rewards: torch.Tensor) -> torch.Tensor:
     """Calculate the 'loss' required to get the policy gradient
 
     Formula for gradient at
@@ -82,12 +82,17 @@ def calculate_loss(epoch_log_probability_actions: torch.Tensor, epoch_action_rew
         epoch_action_rewards (torch.Tensor): Rewards for each of these actions
 
     Returns:
-        float: Pseudo-loss
+        torch.Tensor: Pseudo-loss
     """
     return -(epoch_log_probability_actions * epoch_action_rewards).mean()
 
 
-def train_one_epoch(env: gym.Env, model: nn.Module, optimizer: Optimizer, max_timesteps=5000, episode_timesteps=200) -> float:
+def train_one_epoch(
+        env: gym.Env,
+        model: nn.Module,
+        optimizer: Optimizer,
+        max_timesteps=5000,
+        episode_timesteps=200) -> float:
     """Train the model for one epoch
 
     Args:
@@ -105,7 +110,7 @@ def train_one_epoch(env: gym.Env, model: nn.Module, optimizer: Optimizer, max_ti
     epoch_total_timesteps = 0
 
     # Returns from each episode (to keep track of progress)
-    epoch_returns: list[int] = []
+    epoch_returns: list[float] = []
 
     # Action log probabilities and rewards per step (for calculating loss)
     epoch_log_probability_actions = []
@@ -119,7 +124,7 @@ def train_one_epoch(env: gym.Env, model: nn.Module, optimizer: Optimizer, max_ti
             break
 
         # Running total of this episode's rewards
-        episode_reward: int = 0
+        episode_reward: float = 0
 
         # Reset the environment and get a fresh observation
         observation = env.reset()
@@ -140,7 +145,7 @@ def train_one_epoch(env: gym.Env, model: nn.Module, optimizer: Optimizer, max_ti
             epoch_log_probability_actions.append(log_probability_action)
 
             # Finish the action loop if this episode is done
-            if done == True:
+            if done is True:
                 # Add one reward per timestep
                 for _ in range(timestep + 1):
                     epoch_action_rewards.append(episode_reward)
@@ -161,7 +166,7 @@ def train_one_epoch(env: gym.Env, model: nn.Module, optimizer: Optimizer, max_ti
     optimizer.step()
     optimizer.zero_grad()
 
-    return np.mean(epoch_returns)
+    return float(np.mean(epoch_returns))
 
 
 def train(epochs=40) -> None:

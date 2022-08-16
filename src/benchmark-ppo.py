@@ -1,11 +1,13 @@
-import gym
+import gym  # type: ignore
 import numpy as np
-from gym import Env
-from stable_baselines3 import PPO
+from gym import Env  # type: ignore
+from stable_baselines3.ppo.ppo import PPO
 from stable_baselines3.common.base_class import BaseAlgorithm
-from stable_baselines3.common.vec_env import DummyVecEnv, VecVideoRecorder
+from stable_baselines3.common.vec_env.dummy_vec_env import DummyVecEnv
+from stable_baselines3.common.vec_env.vec_video_recorder import VecVideoRecorder
 from stable_baselines3.ppo.policies import MlpPolicy
-from xvfbwrapper import Xvfb
+from xvfbwrapper import Xvfb  # type: ignore
+from stable_baselines3.common.vec_env.base_vec_env import VecEnv
 
 
 def create_model(env: Env) -> BaseAlgorithm:
@@ -22,18 +24,19 @@ def evaluate(model: BaseAlgorithm, num_episodes=100):
     :return: (float) Mean reward for the last num_episodes
     """
     env = model.get_env()
-    all_episode_rewards = []
+    all_episode_rewards: list[float] = []
+
     for i in range(num_episodes):
-        episode_rewards = []
+        episode_rewards: list[float] = []
         done = False
-        obs = env.reset()
+        obs: np.ndarray = env.reset()   # type: ignore
         while not done:
             # _states are only useful when using LSTM policies
             action, _states = model.predict(obs)
             # here, action, rewards and dones are arrays
             # because we are using vectorized env
-            obs, reward, done, info = env.step(action)
-            episode_rewards.append(reward)
+            obs, reward, done, info = env.step(action)  # type: ignore
+            episode_rewards.append(reward)  # type: ignore
 
         all_episode_rewards.append(sum(episode_rewards))
 
@@ -49,7 +52,8 @@ def record_video(env_id: str, model: BaseAlgorithm, video_length=500, prefix='',
     vdisplay = Xvfb()
     vdisplay.start()
 
-    eval_env = DummyVecEnv([lambda: gym.make(env_id)])
+    eval_env: VecEnv = DummyVecEnv([lambda: gym.make(env_id)])
+
     # Start the video at step=0 and record 500 steps
     eval_env = VecVideoRecorder(eval_env, video_folder=video_folder,
                                 record_video_trigger=lambda step: step == 0, video_length=video_length,
@@ -57,7 +61,7 @@ def record_video(env_id: str, model: BaseAlgorithm, video_length=500, prefix='',
 
     obs = eval_env.reset()
     for _ in range(video_length):
-        action, _ = model.predict(obs)
+        action, _ = model.predict(obs)  # type: ignore
         obs, _, _, _ = eval_env.step(action)
 
     # Close the video recorder
