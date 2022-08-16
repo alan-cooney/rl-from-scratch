@@ -13,7 +13,7 @@ blog](https://medium.com/@alancooney/vanilla-policy-gradient-from-scratch-3c9ebb
 
 ### Generalized Advantage Estimation (GAE)
 
-Implements the generalised advantage estimation from 
+Implements the generalized advantage estimation from 
 [High-Dimensional Continuous Control Using Generalized Advantage
 Estimation](https://arxiv.org/abs/1506.02438) by Schulman et al. To do this I
 have converted the VPG model into an actor-critic model with a separately
