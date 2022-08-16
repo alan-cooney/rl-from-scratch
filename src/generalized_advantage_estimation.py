@@ -67,6 +67,29 @@ def get_action(policy: Categorical) -> tuple[int, float]:
     return action_int, log_probability_action
 
 
+def calculate_policy_fn_loss(
+        epoch_log_probability_actions: torch.Tensor,
+        epoch_action_rewards: torch.Tensor) -> float:
+    """Calculate the policy function (actor) 'loss' required to get the policy gradient
+
+    Formula for gradient at
+    https://spinningup.openai.com/en/latest/spinningup/rl_intro3.html#deriving-the-simplest-policy-gradient
+
+    Note that this isn't really loss - it's just the sum of the log probability
+    of each action times the episode return. We calculate this so we can
+    back-propagate to get the policy gradient.
+
+    Args:
+        epoch_log_probability_actions (torch.Tensor): Log probabilities of the
+            actions taken
+        epoch_action_rewards (torch.Tensor): Rewards for each of these actions
+
+    Returns:
+        float: Pseudo-loss
+    """
+    return -(epoch_log_probability_actions * epoch_action_rewards).mean()
+
+
 def calculate_value_fn_loss(
         epoch_action_returns: list[int],
         epoch_state_value_estimates: list[torch.Tensor]) -> float:
@@ -86,27 +109,32 @@ def calculate_value_fn_loss(
     return ((value_estimates - returns)**2).mean()
 
 
-def calculate_policy_fn_loss(
-        epoch_log_probability_actions: torch.Tensor,
-        epoch_action_rewards: torch.Tensor) -> float:
-    """Calculate the 'loss' required to get the policy gradient
+def generalized_advantage_estimates(
+    rewards: list[int],
+    state_value_estimates: list[torch.Tensor],
+    gamma=0.99,
+    lam=0.95
+) -> list[float]:
 
-    Formula for gradient at
-    https://spinningup.openai.com/en/latest/spinningup/rl_intro3.html#deriving-the-simplest-policy-gradient
+    episode_length = len(rewards)
 
-    Note that this isn't really loss - it's just the sum of the log probability
-    of each action times the episode return. We calculate this so we can
-    back-propagate to get the policy gradient.
+    # Calculate the delta terms (page 4)
+    # delta^V_t = r_t + gamma * V_(S_t+1) - V_(S_t)
+    deltas: list[float] = []
+    for timestep in range(episode_length):
+        delta = rewards[timestep - 1] \
+            + gamma * state_value_estimates[timestep].item() \
+            - state_value_estimates[timestep - 1].item()
+        deltas.append(delta)
 
-    Args:
-        epoch_log_probability_actions (torch.Tensor): Log probabilities of the
-            actions taken
-        epoch_action_rewards (torch.Tensor): Rewards for each of these actions
+    # Calculate the gaes (in reverse order)
+    gaes: list[float] = []
+    for timestep in reversed(range(episode_length - 1)):
+        prev_gae = gaes[0] if gaes else 0
+        gae = prev_gae * gamma * lam + deltas[timestep]
+        gaes.insert(0, gae)
 
-    Returns:
-        float: Pseudo-loss
-    """
-    return -(epoch_log_probability_actions * epoch_action_rewards).mean()
+    return gaes
 
 
 def run_one_episode(
@@ -153,6 +181,9 @@ def run_one_episode(
         # Finish the action loop if this episode is done
         if done == True:
             break
+
+    # Calculate the generalized advantage estimates (GAEs)
+    gaes = generalized_advantage_estimates(rewards, state_value_estimates)
 
     # Calculate the action returns
     episode_return = sum(rewards)
