@@ -39,7 +39,7 @@ def get_policy(model: nn.Module, observation: np.ndarray) -> Categorical:
     Returns:
         Categorical: Multinomial distribution parameterized by model logits
     """
-    observation_tensor = torch.as_tensor(observation, dtype=torch.float32)
+    observation_tensor = torch.as_tensor(observation)
     logits = model(observation_tensor)
 
     # Categorical will also normalize the logits for us
@@ -67,7 +67,9 @@ def get_action(policy: Categorical) -> tuple[int, float]:
     return action_int, log_probability_action
 
 
-def calculate_value_fn_loss(epoch_action_returns: list[int], epoch_state_value_estimates: list[torch.Tensor]) -> float:
+def calculate_value_fn_loss(
+        epoch_action_returns: list[int],
+        epoch_state_value_estimates: list[torch.Tensor]) -> float:
     """Calculate the value function (critic) loss
 
     Uses mean squared error
@@ -84,7 +86,9 @@ def calculate_value_fn_loss(epoch_action_returns: list[int], epoch_state_value_e
     return ((value_estimates - returns)**2).mean()
 
 
-def calculate_policy_fn_loss(epoch_log_probability_actions: torch.Tensor, epoch_action_rewards: torch.Tensor) -> float:
+def calculate_policy_fn_loss(
+        epoch_log_probability_actions: torch.Tensor,
+        epoch_action_rewards: torch.Tensor) -> float:
     """Calculate the 'loss' required to get the policy gradient
 
     Formula for gradient at
@@ -122,7 +126,7 @@ def run_one_episode(
         tuple[list[int], list[float], int]: Tuple of action returns, log
         probabilities of those actions, state value estimates, and the total episode return
     """
-    # Keep track of episode metrics
+    # Keep track of metrics
     rewards: list[int] = []
     state_value_estimates: list[torch.Tensor] = []
     log_probability_actions: list[torch.Tensor] = []
@@ -134,7 +138,7 @@ def run_one_episode(
     while True:
         # Estimate the value of the state
         state_value_estimate = value_function_model(
-            torch.as_tensor(observation, dtype=torch.float32))
+            torch.as_tensor(observation))
         state_value_estimates.append(state_value_estimate)
 
         # Get the policy and act
@@ -175,7 +179,7 @@ def train_one_epoch(
     Returns:
         float: Average return from the epoch
     """
-
+    # Keep track of metrics
     epoch_action_returns: list[int] = []
     epoch_log_probability_actions: list[torch.Tensor] = []
     epoch_state_value_estimates: list[torch.Tensor] = []
@@ -192,16 +196,15 @@ def train_one_epoch(
         epoch_state_value_estimates += state_value_estimates
         epoch_episode_returns.append(episode_return)
 
-    # Calculate the value function loss
+    # Calculate the policy function (actor) loss
+    policy_function_loss = calculate_policy_fn_loss(
+        torch.stack(epoch_log_probability_actions),
+        torch.as_tensor(epoch_action_returns)
+    )
+
+    # Calculate the value function (critic) loss
     value_function_loss = calculate_value_fn_loss(
         epoch_action_returns, epoch_state_value_estimates)
-
-    # Calculate the policy function loss
-    policy_function_loss = calculate_policy_fn_loss(torch.stack(
-        epoch_log_probability_actions),
-        torch.as_tensor(
-        epoch_action_returns, dtype=torch.float32)
-    )
 
     # Step the weights and biases
     value_function_loss.backward()
