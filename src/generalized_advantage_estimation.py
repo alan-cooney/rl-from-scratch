@@ -91,69 +91,58 @@ def calculate_policy_fn_loss(
 
 
 def calculate_value_fn_loss(
-        epoch_action_returns: list[float],
-        epoch_state_value_estimates: list[torch.Tensor]) -> torch.Tensor:
+        epoch_action_returns: torch.Tensor,
+        epoch_state_value_estimates: torch.Tensor) -> torch.Tensor:
     """Calculate the value function (critic) loss
 
     Uses mean squared error
 
     Args:
-        epoch_action_returns (list[float]): State-action returns
-        epoch_state_value_estimates (list[torch.Tensor]): State value estimates
+        epoch_action_returns (torch.Tensor): State-action returns
+        epoch_state_value_estimates (torch.Tensor): State value estimates
 
     Returns:
-        float: Mean square error (MSE)
+        torch.Tensor: Mean square error (MSE)
     """
-    value_estimates = torch.stack(epoch_state_value_estimates)
-    returns = torch.as_tensor(epoch_action_returns)
-    return ((value_estimates - returns)**2).mean()
+    return ((epoch_state_value_estimates - epoch_action_returns)**2).mean()
 
 
 def generalized_advantage_estimates(
-    rewards: list[float],
-    state_value_estimates: list[torch.Tensor],
+    rewards: torch.Tensor,
+    state_value_estimates: torch.Tensor,
     gamma=0.99,
     lam=0.95
-) -> list[float]:
+) -> torch.Tensor:
     """Generalized advantage estimates for one episode
 
     Follows the approach in 'High-Dimensional Continuous Control Using
     Generalized Advantage Estimation' at https://arxiv.org/abs/1506.02438 .
 
     Args:
-        rewards (list[int]): Episode rewards
-        state_value_estimates (list[torch.Tensor]): State value estimates from
+        rewards (torch.Tensor): Episode rewards
+        state_value_estimates (torch.Tensor): State value estimates from
         the critic model
         gamma (float, optional): Gamma hyperparameter. Defaults to 0.99.
         lam (float, optional): Lambda hyperparameter. Defaults to 0.95.
 
     Returns:
-        list[float]: GAEs (one per timestep of the episode)
+        torch.Tensor: GAEs (one per timestep of the episode)
     """
 
     episode_length = len(rewards)
 
     # Calculate the delta terms (page 4)
     # delta^V_t = r_t + gamma * V_(S_t+1) - V_(S_t)
-    deltas: list[float] = []
-
-    for timestep in range(episode_length):
-        # The next state value estimate is zero for the terminal timestep
-        next_value = state_value_estimates[timestep + 1].item() if len(
-            state_value_estimates) > timestep + 1 else 0.
-
-        delta = rewards[timestep] \
-            + gamma * next_value \
-            - state_value_estimates[timestep].item()
-
-        deltas.append(delta)
+    next_values = state_value_estimates.detach().roll(-1)
+    next_values[episode_length - 1] = 0.
+    deltas = rewards + gamma * next_values - state_value_estimates.detach()
 
     # Calculate the gaes (in reverse order)
-    gaes: list[float] = []
+    gaes = torch.zeros(episode_length)
     for timestep in reversed(range(episode_length)):
-        prev_gae = gaes[0] if gaes else 0
+        prev_gae = gaes[timestep + 1] if timestep + 1 < episode_length else 0.
         gae = prev_gae * gamma * lam + deltas[timestep]
-        gaes.insert(0, gae)
+        gaes[timestep] = gae
 
     return gaes
 
@@ -161,8 +150,9 @@ def generalized_advantage_estimates(
 def run_one_episode(
     env: gym.Env,
     policy_function_model: nn.Module,
-    value_function_model: nn.Module
-) -> tuple[list[float], list[torch.Tensor], list[torch.Tensor], list[float], float]:
+    value_function_model: nn.Module,
+    max_timesteps: int
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, float]:
     """Run one episode
 
     Args:
@@ -170,26 +160,31 @@ def run_one_episode(
         policy_function_model (nn.Module): Policy function model (actor)
         value_function_model (nn.Module): Value function model (critic)
         optimizer (Optimizer): Optimizer
+        max_timesteps (int): Maximum timesteps per episode
 
     Returns:
-        tuple[list[float], list[torch.Tensor], list[torch.Tensor], list[float],
-        float]: Tuple of action returns, log probabilities of those actions, state
-        value estimates, gaes, and the total episode return.
+        tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, float]:
+        Tuple of action returns, log probabilities of those actions, state value
+        estimates, gaes, and the total episode return.
     """
     # Keep track of metrics
-    rewards: list[float] = []
-    state_value_estimates: list[torch.Tensor] = []
-    log_probability_actions: list[torch.Tensor] = []
+    # Note we initialise tensors of the size of the max timesteps to enable
+    # efficient calculations with fixed size tensors (it won't change any of the
+    # underlying equations as the rewards are just 0 for any steps we don't get
+    # to).
+    rewards = torch.zeros(max_timesteps)
+    state_value_estimates = torch.zeros(max_timesteps)
+    log_probability_actions = torch.zeros(max_timesteps)
 
     # Reset the environment and get a fresh observation
     observation = env.reset()
 
     # Loop through timesteps (until done)
-    while True:
+    for timestep in range(max_timesteps):
         # Estimate the value of the state
         state_value_estimate = value_function_model(
             torch.as_tensor(observation))
-        state_value_estimates.append(state_value_estimate)
+        state_value_estimates[timestep] = state_value_estimate
 
         # Get the policy and act
         policy = get_policy(policy_function_model, observation)
@@ -197,8 +192,8 @@ def run_one_episode(
         observation, reward, done, _ = env.step(action)
 
         # Update the metrics
-        rewards.append(reward)
-        log_probability_actions.append(log_probability_action)
+        rewards[timestep] = reward
+        log_probability_actions[timestep] = log_probability_action
 
         # Finish the action loop if this episode is done
         if done is True:
@@ -208,9 +203,8 @@ def run_one_episode(
     gaes = generalized_advantage_estimates(rewards, state_value_estimates)
 
     # Calculate the action returns
-    episode_return: float = sum(rewards)
-    total_timesteps = len(rewards)
-    action_returns: list[float] = [episode_return] * total_timesteps
+    episode_return: float = rewards.sum().item()
+    action_returns = torch.full([max_timesteps], episode_return)
 
     return action_returns, log_probability_actions, state_value_estimates, gaes, episode_return
 
@@ -220,7 +214,9 @@ def train_one_epoch(
     policy_function_model: nn.Module,
     policy_function_optimizer: Optimizer,
     value_function_model: nn.Module,
-    value_function_optimizer: Optimizer
+    value_function_optimizer: Optimizer,
+    episodes_per_batch: int = 200,
+    timesteps_per_episode: int = 200,
 ) -> float:
     """Train one epoch
 
@@ -228,33 +224,42 @@ def train_one_epoch(
         env (gym.Env): Gym environment
         policy_function_model (nn.Module): Policy function model (actor)
         policy_function_optimizer (Optimizer): Policy function optimizer (actor)
+        value_function_model (nn.Module): Value function model (critic)
+        value_function_optimizer (Optimizer): Value function optimizer (critic)
+        episodes_per_batch (int): Number of episodes per batch. Defaults to 200.
+        timesteps_per_episode (int): Number of timesteps per episode. Defaults to 200.
 
     Returns:
         float: Average return from the epoch
     """
     # Keep track of metrics
-    epoch_action_returns: list[float] = []
-    epoch_advantage_estimators: list[float] = []
-    epoch_log_probability_actions: list[torch.Tensor] = []
-    epoch_state_value_estimates: list[torch.Tensor] = []
+    epoch_action_returns = torch.empty(
+        [episodes_per_batch, timesteps_per_episode])
+    epoch_advantage_estimators = torch.empty(
+        [episodes_per_batch, timesteps_per_episode])
+    epoch_log_probability_actions = torch.empty(
+        [episodes_per_batch, timesteps_per_episode])
+    epoch_state_value_estimates = torch.empty(
+        [episodes_per_batch, timesteps_per_episode])
     epoch_episode_returns: list[float] = []
 
     # Run a batch of episodes
-    for _ in range(200):
+    for episode in range(episodes_per_batch):
         action_returns, log_probability_actions, state_value_estimates, gaes, episode_return = run_one_episode(
             env,
             policy_function_model,
-            value_function_model)
-        epoch_action_returns += action_returns
-        epoch_advantage_estimators += gaes
-        epoch_log_probability_actions += log_probability_actions
-        epoch_state_value_estimates += state_value_estimates
+            value_function_model,
+            timesteps_per_episode)
+        epoch_action_returns[episode] = action_returns
+        epoch_advantage_estimators[episode] = gaes
+        epoch_log_probability_actions[episode] = log_probability_actions
+        epoch_state_value_estimates[episode] = state_value_estimates
         epoch_episode_returns.append(episode_return)
 
     # Calculate the policy function (actor) loss
     policy_function_loss = calculate_policy_fn_loss(
-        torch.stack(epoch_log_probability_actions),
-        torch.as_tensor(epoch_advantage_estimators)
+        epoch_log_probability_actions,
+        epoch_advantage_estimators
     )
 
     # Calculate the value function (critic) loss
@@ -262,7 +267,7 @@ def train_one_epoch(
         epoch_action_returns, epoch_state_value_estimates)
 
     # Step the weights and biases
-    value_function_loss.backward()
+    value_function_loss.backward(retain_graph=True)
     value_function_optimizer.step()
 
     policy_function_loss.backward()
@@ -294,6 +299,7 @@ def train(epochs=30) -> None:
     # 2 models with some shared layers for this purpose (as the lower layers are
     # learning similar things), but for simplicity here they're kept entirely
     # separate.
+    # type: ignore
     number_observation_features = env.observation_space.shape[0]
     number_actions = env.action_space.n
     policy_function_model = create_model(

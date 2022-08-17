@@ -4,14 +4,14 @@ import torch
 
 class TestGeneralizedAdvantageEstimates:
     def test_correct_fixed_advantage(self):
-        rewards = [3.]
-        state_value_estimates = [torch.tensor(1.)]
+        rewards = torch.tensor([3.])
+        state_value_estimates = torch.tensor([1.])
         res = generalized_advantage_estimates(rewards, state_value_estimates)
-        assert res == [2.]
+        assert res == torch.tensor([2.])
 
     def test_two_timesteps(self):
-        rewards = [3., 2.]
-        state_value_estimates = [torch.tensor(2.), torch.tensor(1.)]
+        rewards = torch.tensor([3., 2.])
+        state_value_estimates = torch.tensor([2., 1.])
         gamma = 0.99
         lam = 0.95
         res = generalized_advantage_estimates(
