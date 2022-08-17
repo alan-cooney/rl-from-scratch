@@ -164,7 +164,7 @@ def run_one_episode(
 
     Returns:
         tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, float]:
-        Tuple of action returns, log probabilities of those actions, state value
+        Tuple of state values, log probabilities of actions, state value
         estimates, gaes, and the total episode return.
     """
     # Keep track of metrics
@@ -173,6 +173,7 @@ def run_one_episode(
     # underlying equations as the rewards are just 0 for any steps we don't get
     # to).
     rewards = torch.zeros(max_timesteps)
+    state_values = torch.zeros(max_timesteps)
     state_value_estimates = torch.zeros(max_timesteps)
     log_probability_actions = torch.zeros(max_timesteps)
 
@@ -193,6 +194,12 @@ def run_one_episode(
 
         # Update the metrics
         rewards[timestep] = reward
+
+        # For state values, add the return to every action previous to this
+        # (including this one)
+        for step in range(timestep + 1):
+            state_values[step] += reward
+
         log_probability_actions[timestep] = log_probability_action
 
         # Finish the action loop if this episode is done
@@ -204,9 +211,8 @@ def run_one_episode(
 
     # Calculate the action returns
     episode_return: float = rewards.sum().item()
-    action_returns = torch.full([max_timesteps], episode_return)
 
-    return action_returns, log_probability_actions, state_value_estimates, gaes, episode_return
+    return state_values, log_probability_actions, state_value_estimates, gaes, episode_return
 
 
 def train_one_epoch(
@@ -232,8 +238,12 @@ def train_one_epoch(
     Returns:
         float: Average return from the epoch
     """
+    # Zero gradients
+    value_function_optimizer.zero_grad()
+    policy_function_optimizer.zero_grad()
+
     # Keep track of metrics
-    epoch_action_returns = torch.empty(
+    epoch_state_values = torch.empty(
         [episodes_per_batch, timesteps_per_episode])
     epoch_advantage_estimators = torch.empty(
         [episodes_per_batch, timesteps_per_episode])
@@ -245,12 +255,12 @@ def train_one_epoch(
 
     # Run a batch of episodes
     for episode in range(episodes_per_batch):
-        action_returns, log_probability_actions, state_value_estimates, gaes, episode_return = run_one_episode(
+        state_values, log_probability_actions, state_value_estimates, gaes, episode_return = run_one_episode(
             env,
             policy_function_model,
             value_function_model,
             timesteps_per_episode)
-        epoch_action_returns[episode] = action_returns
+        epoch_state_values[episode] = state_values
         epoch_advantage_estimators[episode] = gaes
         epoch_log_probability_actions[episode] = log_probability_actions
         epoch_state_value_estimates[episode] = state_value_estimates
@@ -264,7 +274,7 @@ def train_one_epoch(
 
     # Calculate the value function (critic) loss
     value_function_loss = calculate_value_fn_loss(
-        epoch_action_returns, epoch_state_value_estimates)
+        epoch_state_values, epoch_state_value_estimates)
 
     # Step the weights and biases
     value_function_loss.backward(retain_graph=True)
@@ -272,9 +282,6 @@ def train_one_epoch(
 
     policy_function_loss.backward()
     policy_function_optimizer.step()
-
-    value_function_optimizer.zero_grad()
-    policy_function_optimizer.zero_grad()
 
     return float(np.mean(epoch_episode_returns))
 
