@@ -136,10 +136,16 @@ def generalized_advantage_estimates(
     # Calculate the delta terms (page 4)
     # delta^V_t = r_t + gamma * V_(S_t+1) - V_(S_t)
     deltas: list[float] = []
+
     for timestep in range(episode_length):
-        delta = rewards[timestep - 1] \
-            + gamma * state_value_estimates[timestep].item() \
-            - state_value_estimates[timestep - 1].item()
+        # The next state value estimate is zero for the terminal timestep
+        next_value = state_value_estimates[timestep + 1].item() if len(
+            state_value_estimates) > timestep + 1 else 0.
+
+        delta = rewards[timestep] \
+            + gamma * next_value \
+            - state_value_estimates[timestep].item()
+
         deltas.append(delta)
 
     # Calculate the gaes (in reverse order)
